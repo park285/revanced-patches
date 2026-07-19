@@ -9,6 +9,7 @@ readonly PROBE_CLASS="app.revanced.extension.kakaotalk.chatlog.readreceipt.ReadR
 readonly HARD_STARTUP_MS=5000
 readonly SAMPLE_COUNT=11
 readonly REMOTE_TIMEOUT_SECONDS=20
+readonly PROBE_TIMEOUT_SECONDS=60
 readonly STARTUP_P95_OVERHEAD_BUDGET_MS=2000
 readonly DISABLED_CAPTURE_P99_BUDGET_US=1000
 readonly ACTIVE_CAPTURE_P99_BUDGET_US=250000
@@ -128,8 +129,9 @@ parse_installed_apk_path() {
 }
 
 remote_shell_script() {
+    local timeout_seconds="${2:-$REMOTE_TIMEOUT_SECONDS}"
     printf '%s\n' "$1" |
-        timeout --signal=TERM "$REMOTE_TIMEOUT_SECONDS" \
+        timeout --signal=TERM "$timeout_seconds" \
             ssh -T -- "$ssh_target" 'adb shell sh -s'
 }
 
@@ -265,7 +267,8 @@ run_probe() {
     local command status
     command="CLASSPATH=$device_dex:$installed_apk app_process /system/bin $PROBE_CLASS $mode $probe_nonce; probe_exit_status=\$?; printf \"probe_exit_status=%s\\n\" \"\$probe_exit_status\""
     set +e
-    remote_shell_script "su '$device_uid' -c '$command'" >"$destination"
+    remote_shell_script "su '$device_uid' -c '$command'" "$PROBE_TIMEOUT_SECONDS" \
+        >"$destination"
     status=$?
     set -e
     require_probe_output "$destination" "$expected_exit" "$status"
@@ -459,6 +462,8 @@ EOF
 
 run_self_test() {
     local rejected=0 runner_dir budget_fixture tampered gfx_fixture probe_fixture
+    (( PROBE_TIMEOUT_SECONDS > REMOTE_TIMEOUT_SECONDS && PROBE_TIMEOUT_SECONDS <= 60 )) ||
+        fail "probe timeout bound self-test failed"
     contains_live_path safe.apk lineage host output || true
     if contains_live_path safe.apk /data/user/0/com.kakao.talk/databases/live.db; then
         rejected=1
@@ -550,7 +555,7 @@ run_self_test() {
     verify_output_templates "${BASH_SOURCE[0]}" || fail "output template self-test failed"
     runner_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
     bash "$runner_dir/verify-read-receipt-v2-performance-receipt.sh" --self-test >/dev/null
-    echo "RRV2-DEVICE-PERFORMANCE-RUNNER-SELF-TEST passed: livePathReject=1 percentile=nearestRank gfxCountExact=1 gfxDuplicateReject=1 gfxSuffixReject=1 installedApkPathExact=1 installedApkPathReject=9 probeExitExact=1 probeTransportReject=1 probeExitDuplicateReject=1 modes=9 markerTimeoutRecovery=1 markerResponseLossRecovery=1 ambiguousMarkerReject=1 budgetBoundary=1 budgetExceedReject=5 templateExact=1 receiptVerifier=1"
+    echo "RRV2-DEVICE-PERFORMANCE-RUNNER-SELF-TEST passed: livePathReject=1 percentile=nearestRank gfxCountExact=1 gfxDuplicateReject=1 gfxSuffixReject=1 installedApkPathExact=1 installedApkPathReject=9 probeExitExact=1 probeTransportReject=1 probeExitDuplicateReject=1 probeTimeoutBound=1 modes=9 markerTimeoutRecovery=1 markerResponseLossRecovery=1 ambiguousMarkerReject=1 budgetBoundary=1 budgetExceedReject=5 templateExact=1 receiptVerifier=1"
 }
 
 if (( $# == 1 )) && [[ "$1" == "--self-test" ]]; then
