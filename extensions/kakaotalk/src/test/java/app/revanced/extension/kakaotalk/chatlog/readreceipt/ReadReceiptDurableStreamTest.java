@@ -140,16 +140,16 @@ public class ReadReceiptDurableStreamTest {
     }
 
     @Test
-    public void terminalClearFaultNeverReissuesCommittedBatchAfterRestart() {
+    public void committedClearFaultNeverReissuesCommittedBatchAfterRestart() {
         Fixture fixture = new Fixture();
         FakePendingBatchJournal journal = new FakePendingBatchJournal();
-        journal.failClears = 1;
+        journal.failCommittedClears = 1;
         ReadReceiptDurableStream stream = fixture.newStream(journal);
 
         AppendResult result = stream.append(batch(26, 2));
 
         assertEquals(AppendOutcome.COMMITTED, result.outcome);
-        assertEquals(PendingBatchState.TERMINAL_COMMITTED,
+        assertEquals(PendingBatchState.COMMITTING,
                 journal.record.state);
         int inserts = Collections.frequency(fixture.store.trace, "INSERT_BATCH");
         fixture.scheduler.queued.clear();
@@ -190,29 +190,18 @@ public class ReadReceiptDurableStreamTest {
     }
 
     @Test
-    public void terminalPublishFailureLeavesCommittingEvidenceForReadOnlyRestartReconcile() {
+    public void committedOutcomeSkipsTerminalPublish() {
         Fixture fixture = new Fixture();
         FakePendingBatchJournal journal = new FakePendingBatchJournal();
         journal.failTerminals = 1;
         ReadReceiptDurableStream stream = fixture.newStream(journal);
 
-        try {
-            stream.append(batch(28, 1));
-            throw new AssertionError("expected fail-closed terminal publish");
-        } catch (PendingJournalContractException expected) {
-            assertEquals(1, fixture.supervisor.calls);
-        }
-        assertEquals(PendingBatchState.COMMITTING,
-                journal.record.state);
-        int inserts = Collections.frequency(fixture.store.trace, "INSERT_BATCH");
-        fixture.scheduler.queued.clear();
-        fixture.scheduler.delays.clear();
+        AppendResult result = stream.append(batch(28, 1));
 
-        fixture.newStream(journal);
-        fixture.scheduler.runNext();
-
+        assertEquals(AppendOutcome.COMMITTED, result.outcome);
         assertNull(journal.record);
-        assertEquals(inserts, Collections.frequency(fixture.store.trace, "INSERT_BATCH"));
+        assertEquals(1, journal.failTerminals);
+        assertEquals(0, fixture.supervisor.calls);
     }
 
     @Test
@@ -1268,6 +1257,7 @@ public class ReadReceiptDurableStreamTest {
         int failLoads;
         int failCommitting;
         int failCommittingAfter;
+        int failCommittedClears;
         int failTerminals;
         int failClears;
 
@@ -1294,6 +1284,13 @@ public class ReadReceiptDurableStreamTest {
             if (failCommittingAfter-- > 0) {
                 throw new StorageException();
             }
+        }
+
+        @Override
+        public void clearCommittingExact(BatchInput expected) {
+            if (failCommittedClears-- > 0) throw new StorageException();
+            require(expected, PendingBatchState.COMMITTING);
+            record = null;
         }
 
         @Override

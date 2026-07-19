@@ -175,7 +175,7 @@ final class ReadReceiptDurabilityRecoveryCoordinator {
         }
         if (result.outcome == AppendOutcome.COMMITTED
                 || result.outcome == AppendOutcome.CONFIRMED_LOSS) {
-            finishSuccess(input, result);
+            finishSuccess(input);
             return result;
         }
         if (result.outcome == AppendOutcome.UNCERTAIN) {
@@ -196,7 +196,7 @@ final class ReadReceiptDurabilityRecoveryCoordinator {
                 : reconcileCommitting(record);
         if (result.outcome == AppendOutcome.COMMITTED
                 || result.outcome == AppendOutcome.CONFIRMED_LOSS) {
-            finishSuccess(record.input, result);
+            finishSuccess(record.input);
             return loadPendingBatch() == null;
         }
         if (result.outcome == AppendOutcome.UNCERTAIN) {
@@ -226,16 +226,12 @@ final class ReadReceiptDurabilityRecoveryCoordinator {
         }
     }
 
-    private void finishSuccess(BatchInput input, AppendResult result) {
+    private void finishSuccess(BatchInput input) {
         try {
-            pendingBatchJournal.markTerminalExact(input,
-                    result.outcome == AppendOutcome.COMMITTED
-                            ? PendingBatchState.TERMINAL_COMMITTED
-                            : PendingBatchState.TERMINAL_CONFIRMED_LOSS, null);
+            pendingBatchJournal.clearCommittingExact(input);
         } catch (RuntimeException exception) {
-            throw failClosed(new PendingJournalContractException());
+            requestRetry();
         }
-        clearPendingTerminal(loadPendingBatch());
     }
 
     private void finishUncertain(BatchInput input) {

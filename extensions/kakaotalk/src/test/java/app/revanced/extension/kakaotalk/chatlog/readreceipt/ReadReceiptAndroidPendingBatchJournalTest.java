@@ -46,6 +46,21 @@ public class ReadReceiptAndroidPendingBatchJournalTest {
     }
 
     @Test
+    public void committedClearTransitionsDirectlyFromCommittingToEmpty() {
+        ReadReceiptAndroidCounterJournalTest.FakeOps ops = newOps();
+        ReadReceiptAndroidPendingBatchJournal journal = journal(ops);
+        BatchInput input = input(25, 2);
+        journal.publishPending(input);
+        journal.markCommittingExact(input);
+        assertStorageFailure(() -> journal.clearCommittingExact(input(27, 2)));
+        assertState(journal.load(), PendingBatchState.COMMITTING, input);
+
+        journal.clearCommittingExact(input);
+
+        assertNull(journal(ops).load());
+    }
+
+    @Test
     public void uncertainTerminalRoundTripsAbsoluteCounterTarget() {
         ReadReceiptAndroidCounterJournalTest.FakeOps ops = newOps();
         ReadReceiptAndroidPendingBatchJournal journal = journal(ops);
@@ -194,6 +209,30 @@ public class ReadReceiptAndroidPendingBatchJournalTest {
             } else {
                 assertState(after,
                         PendingBatchState.TERMINAL_COMMITTED, input);
+            }
+            assertEquals(operation, 0,
+                    ReadReceiptAndroidCounterJournalTest.temporaryFileCount(ops, "pending"));
+        }
+    }
+
+    @Test
+    public void committedClearFaultsKeepCommittingOrDurableEmpty() {
+        for (String operation : Arrays.asList(
+                "CREATE", "WRITE", "FSYNC", "REPLACE", "FSYNC_DIR")) {
+            ReadReceiptAndroidCounterJournalTest.FakeOps ops = newOps();
+            ReadReceiptAndroidPendingBatchJournal journal = journal(ops);
+            BatchInput input = input(26, 1);
+            journal.publishPending(input);
+            journal.markCommittingExact(input);
+            ops.failOperation = operation;
+
+            assertStorageFailure(() -> journal.clearCommittingExact(input));
+
+            PendingBatchRecord after = journal.load();
+            if ("FSYNC_DIR".equals(operation)) {
+                assertNull(after);
+            } else {
+                assertState(after, PendingBatchState.COMMITTING, input);
             }
             assertEquals(operation, 0,
                     ReadReceiptAndroidCounterJournalTest.temporaryFileCount(ops, "pending"));

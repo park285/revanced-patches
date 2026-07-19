@@ -133,6 +133,8 @@ interface PendingBatchJournal {
 
     void markCommittingExact(BatchInput expected);
 
+    void clearCommittingExact(BatchInput expected);
+
     void markTerminalExact(BatchInput expected, PendingBatchState state,
                            CounterTarget counterTarget);
 

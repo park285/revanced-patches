@@ -87,6 +87,16 @@ final class ReadReceiptAndroidPendingBatchJournal
     }
 
     @Override
+    public void clearCommittingExact(BatchInput expected) {
+        synchronized (PROCESS_LOCK) {
+            PendingBatchRecord current = loadLocked();
+            if (current == null) return;
+            requireState(current, expected, PendingBatchState.COMMITTING);
+            publish(encodeEmpty());
+        }
+    }
+
+    @Override
     public void markTerminalExact(BatchInput expected,
                                   PendingBatchState state,
                                   CounterTarget counterTarget) {
