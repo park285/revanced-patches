@@ -96,6 +96,37 @@ parse_gfx_count() {
     ' <<<"$input"
 }
 
+parse_installed_apk_path() {
+    awk -v package="$PACKAGE" '
+        function valid_token(segment, prefix, encoded) {
+            if (substr(segment, 1, length(prefix)) != prefix) return 0
+            encoded = substr(segment, length(prefix) + 1)
+            return length(encoded) == 24 && encoded ~ /^[A-Za-z0-9_-]+==$/
+        }
+        {
+            prefix = "package:/data/app/"
+            if (index($0, prefix) != 1) {
+                invalid++
+                next
+            }
+            path = substr($0, length("package:") + 1)
+            if (split(path, segment, "/") != 6 || segment[1] != "" ||
+                    segment[2] != "data" || segment[3] != "app" ||
+                    !valid_token(segment[4], "~~") ||
+                    !valid_token(segment[5], package "-") ||
+                    segment[6] != "base.apk") {
+                invalid++
+                next
+            }
+            values[++count] = path
+        }
+        END {
+            if (count != 1 || invalid != 0) exit 1
+            print values[1]
+        }
+    ' <<<"$1"
+}
+
 remote_shell_script() {
     printf '%s\n' "$1" |
         timeout --signal=TERM "$REMOTE_TIMEOUT_SECONDS" \
@@ -436,6 +467,33 @@ run_self_test() {
     if parse_gfx_count total 'Total frames rendered: 2048 (3.85%)' >/dev/null 2>&1; then
         fail "gfx total parser accepted a suffix"
     fi
+    apk_path='/data/app/~~abcdefghijklmnopqrstuv==/com.kakao.talk-ABCDEFGHIJKLMNOPQRSTUV==/base.apk'
+    [[ "$(parse_installed_apk_path "package:$apk_path")" == "$apk_path" ]] ||
+        fail "installed APK path parser self-test failed"
+    if parse_installed_apk_path "package=$apk_path" >/dev/null 2>&1; then
+        fail "installed APK path parser accepted a non-canonical prefix"
+    fi
+    if parse_installed_apk_path $'package:'"$apk_path"$'\npackage:'"$apk_path" \
+        >/dev/null 2>&1; then
+        fail "installed APK path parser accepted duplicate output"
+    fi
+    if parse_installed_apk_path "package:${apk_path}.tmp" >/dev/null 2>&1; then
+        fail "installed APK path parser accepted a suffix"
+    fi
+    for invalid_apk_path in \
+        '/data/app/~~abcdefghijklmnopqrstuv==/com.example.app-ABCDEFGHIJKLMNOPQRSTUV==/base.apk' \
+        '/data/app/abcdefghijklmnopqrstuv==/com.kakao.talk-ABCDEFGHIJKLMNOPQRSTUV==/base.apk' \
+        '/data/app/~~abcdefghijklmnopqrstu==/com.kakao.talk-ABCDEFGHIJKLMNOPQRSTUV==/base.apk' \
+        '/data/app/~~abcdefghijklmnopqrstuv==/com.kakao.talk-ABCDEFGHIJKLMNOPQRSTUV==/../base.apk' \
+        "/data/app/~~abcdefghijklmnopqrstuv==/com.kakao.talk-ABCDEFGHIJKLMNOPQRSTUV=='/base.apk"; do
+        if parse_installed_apk_path "package:$invalid_apk_path" >/dev/null 2>&1; then
+            fail "installed APK path parser accepted an invalid path"
+        fi
+    done
+    if parse_installed_apk_path $'package:'"$apk_path"$'\npackage:/data/app/~~abcdefghijklmnopqrstuv==/com.kakao.talk-ABCDEFGHIJKLMNOPQRSTUV==/split_config.apk' \
+        >/dev/null 2>&1; then
+        fail "installed APK path parser accepted split output"
+    fi
     require_digest "$(printf 'a%.0s' {1..64})" || fail "digest self-test failed"
     [[ "$(marker_recovery_action "marker=exact backup=absent")" == "stable" &&
         "$(marker_recovery_action "marker=absent backup=exact")" == "restore" ]] ||
@@ -470,7 +528,7 @@ run_self_test() {
     verify_output_templates "${BASH_SOURCE[0]}" || fail "output template self-test failed"
     runner_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
     bash "$runner_dir/verify-read-receipt-v2-performance-receipt.sh" --self-test >/dev/null
-    echo "RRV2-DEVICE-PERFORMANCE-RUNNER-SELF-TEST passed: livePathReject=1 percentile=nearestRank gfxCountExact=1 gfxDuplicateReject=1 gfxSuffixReject=1 modes=9 markerTimeoutRecovery=1 markerResponseLossRecovery=1 ambiguousMarkerReject=1 budgetBoundary=1 budgetExceedReject=5 templateExact=1 receiptVerifier=1"
+    echo "RRV2-DEVICE-PERFORMANCE-RUNNER-SELF-TEST passed: livePathReject=1 percentile=nearestRank gfxCountExact=1 gfxDuplicateReject=1 gfxSuffixReject=1 installedApkPathExact=1 installedApkPathReject=9 modes=9 markerTimeoutRecovery=1 markerResponseLossRecovery=1 ambiguousMarkerReject=1 budgetBoundary=1 budgetExceedReject=5 templateExact=1 receiptVerifier=1"
 }
 
 if (( $# == 1 )) && [[ "$1" == "--self-test" ]]; then
@@ -550,8 +608,8 @@ bounded_ssh test ! -e "$remote_dex" || fail "remote probe staging path already e
 remote_shell_script "test ! -e '$device_dex'" >/dev/null ||
     fail "device probe staging path already exists"
 
-installed_apk="$(remote_shell_script "pm path '$PACKAGE'" | awk -F= '$1 == "package" { print $2; exit }')"
-[[ "$installed_apk" =~ ^/data/app/[^[:space:]]+/base\.apk$ ]] || fail "installed APK path is not canonical"
+installed_apk="$(parse_installed_apk_path "$(remote_shell_script "pm path '$PACKAGE'")")" ||
+    fail "installed APK path is not canonical"
 installed_sha="$(remote_shell_script "sha256sum '$installed_apk'" | awk '{ print $1 }')"
 [[ "$installed_sha" == "$signed_output_sha256" ]] || fail "installed APK does not match signed artifact"
 device_uid="$(remote_shell_script "cmd package list packages -U '$PACKAGE'" |
