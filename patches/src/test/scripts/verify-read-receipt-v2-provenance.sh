@@ -435,7 +435,7 @@ validate_performance_binding() {
 
 validate_performance_receipt() {
     validate_performance_binding
-    [[ "$requested_phase" == "final" ]] || return
+    [[ "$requested_phase" == "final" ]] || return 0
     "$script_dir/verify-read-receipt-v2-performance-receipt.sh" \
         "$(property performance_receipt_path)" \
         "$(property lineage_id)" \
@@ -729,6 +729,8 @@ EOF
         "$(sha256_file "$unsigned_parent")" "$unsigned_sha" "$payload_sha"
     provenance="$pre_sign"
     validate_parent_chain pre_sign
+    requested_phase=pre_sign
+    validate_performance_receipt || fail "self-test rejected absent non-final performance evidence"
 
     lane_tampered_parent="$tmp_dir/lane-tampered-parent.properties"
     self_test_provenance_file "$lane_tampered_parent" pre_sign "$lineage" "$unsigned_sha" "$payload_sha" \
@@ -810,7 +812,7 @@ EOF
         fail "self-test accepted performance receipt tamper"
     fi
 
-    echo "RRV2-PROVENANCE-SELF-TEST passed: phases=4 phasePrerequisiteReject=3 notRunReject=1 duplicateReject=1 artifactTamperReject=1 identityTamperReject=1 symlinkReject=1 signerTamperReject=1 signerMultiplicityReject=1 metadataTamperReject=3 metadataDuplicateReject=1 payloadPositive=1 payloadTamperReject=1 applyReceiptPositive=1 applyArtifactSwitchReject=1 applyReceiptSwitchReject=1 dependencyLaneMissingReject=1 dependencyLaneInvalidReject=1 dependencyLaneTamperReject=1 parentDependencyLaneTamperReject=1 lineagePositive=3 staleReject=1 parentSwitchReject=1 smokePositive=1 smokeSwitchReject=1 performancePositive=1 performanceTamperReject=1"
+    echo "RRV2-PROVENANCE-SELF-TEST passed: phases=4 phasePrerequisiteReject=3 notRunReject=1 duplicateReject=1 artifactTamperReject=1 identityTamperReject=1 symlinkReject=1 signerTamperReject=1 signerMultiplicityReject=1 metadataTamperReject=3 metadataDuplicateReject=1 payloadPositive=1 payloadTamperReject=1 applyReceiptPositive=1 applyArtifactSwitchReject=1 applyReceiptSwitchReject=1 dependencyLaneMissingReject=1 dependencyLaneInvalidReject=1 dependencyLaneTamperReject=1 parentDependencyLaneTamperReject=1 lineagePositive=3 staleReject=1 parentSwitchReject=1 smokePositive=1 smokeSwitchReject=1 nonFinalPerformancePositive=1 performancePositive=1 performanceTamperReject=1"
 }
 
 if (( $# == 1 )) && [[ "$1" == "--self-test" ]]; then
