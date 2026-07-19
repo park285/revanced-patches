@@ -204,10 +204,9 @@ final class ReadReceiptAndroidMaintenanceWorker implements RetryWork {
                 opened = SQLiteDatabase.openDatabase(databasePath, null,
                         SQLiteDatabase.OPEN_READWRITE | SQLiteDatabase.NO_LOCALIZED_COLLATORS);
                 opened.setForeignKeyConstraintsEnabled(true);
-                opened.execSQL("PRAGMA busy_timeout=0");
-                if (scalar(opened, "PRAGMA foreign_keys") != 1
+                if (scalar(opened, "PRAGMA busy_timeout=0") != 0
+                        || scalar(opened, "PRAGMA foreign_keys") != 1
                         || scalar(opened, "PRAGMA wal_autocheckpoint=0") != 0
-                        || scalar(opened, "PRAGMA busy_timeout") != 0
                         || scalar(opened, "PRAGMA page_size")
                         != ReadReceiptSchemaV2.PAGE_SIZE_BYTES
                         || scalar(opened, "PRAGMA auto_vacuum")
@@ -274,8 +273,11 @@ final class ReadReceiptAndroidMaintenanceWorker implements RetryWork {
             requireOpen();
             if (maxPages <= 0 || maxPages > MAX_RECLAIM_PAGES_PER_RUN) throw failure();
             try {
-                database.execSQL("PRAGMA busy_timeout=0");
-                database.execSQL("PRAGMA incremental_vacuum(" + maxPages + ")");
+                if (scalar(database, "PRAGMA busy_timeout=0") != 0) throw failure();
+                long before = scalar(database, "PRAGMA freelist_count");
+                if (before == 0) throw failure();
+                drainRows(database, "PRAGMA incremental_vacuum(" + maxPages + ")");
+                if (scalar(database, "PRAGMA freelist_count") >= before) throw failure();
             } catch (RuntimeException exception) {
                 throw failure();
             }
@@ -291,7 +293,7 @@ final class ReadReceiptAndroidMaintenanceWorker implements RetryWork {
         private void checkpointWal(boolean requireEmpty) {
             Cursor cursor = null;
             try {
-                database.execSQL("PRAGMA busy_timeout=0");
+                if (scalar(database, "PRAGMA busy_timeout=0") != 0) throw failure();
                 cursor = database.rawQuery(requireEmpty
                         ? WAL_CHECKPOINT_TRUNCATE_QUERY : WAL_CHECKPOINT_PASSIVE_QUERY, null);
                 if (!cursor.moveToNext() || cursor.getLong(0) != 0 || requireEmpty
@@ -334,6 +336,21 @@ final class ReadReceiptAndroidMaintenanceWorker implements RetryWork {
                 long value = cursor.getLong(0);
                 if (value < 0 || cursor.moveToNext()) throw failure();
                 return value;
+            } catch (RuntimeException exception) {
+                throw failure();
+            } finally {
+                if (cursor != null) cursor.close();
+            }
+        }
+
+        private static void drainRows(SQLiteDatabase database, String sql) {
+            Cursor cursor = null;
+            try {
+                cursor = database.rawQuery(sql, null);
+                int rows = 0;
+                while (cursor.moveToNext()) {
+                    if (++rows > MAX_RECLAIM_PAGES_PER_RUN) throw failure();
+                }
             } catch (RuntimeException exception) {
                 throw failure();
             } finally {

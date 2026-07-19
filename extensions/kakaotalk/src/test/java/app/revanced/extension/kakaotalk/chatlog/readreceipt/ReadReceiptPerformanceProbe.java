@@ -1,11 +1,14 @@
 package app.revanced.extension.kakaotalk.chatlog.readreceipt;
 
+import android.database.Cursor;
+import android.database.sqlite.SQLiteDatabase;
 import android.os.Process;
 import android.system.ErrnoException;
 import android.system.Os;
 import android.system.OsConstants;
 import android.system.StructStat;
 
+import java.io.File;
 import java.security.SecureRandom;
 import java.util.Arrays;
 
@@ -42,19 +45,25 @@ public final class ReadReceiptPerformanceProbe {
                     ReadReceiptPerformanceSandbox.create(rootPath, uid);
             sandboxOwned = true;
             if ("startup-empty".equals(mode)) {
+                requireMaintenancePreflight(sandbox);
                 passed = startupEmpty(sandbox, uid);
             } else if ("startup-near-cap".equals(mode)) {
+                requireMaintenancePreflight(sandbox);
                 passed = startupNearCap(sandbox, uid);
             } else if ("capture-bursts".equals(mode)) {
+                requireMaintenancePreflight(sandbox);
                 passed = captureBursts(sandbox, uid);
             } else if ("capture-disabled".equals(mode)) {
                 passed = captureDisabled();
             } else if ("transfer-drain-256".equals(mode)) {
+                requireMaintenancePreflight(sandbox);
                 passed = transferDrain256(sandbox);
             } else {
                 result("unsupported_mode", false);
             }
-        } catch (Throwable ignored) {
+        } catch (Throwable failure) {
+            metric("probe_failure_kind", failureKind(failure));
+            metric("probe_failure_stage", failureStage(failure));
             result("probe_execution", false);
         } finally {
             cleanupPassed = !sandboxOwned || ReadReceiptPerformanceSandbox.remove(rootPath, uid);
@@ -200,19 +209,144 @@ public final class ReadReceiptPerformanceProbe {
     }
 
     private static Prepared prepareFresh(ReadReceiptPerformanceSandbox sandbox) {
-        byte[] token = new byte[32];
-        byte[] epoch = new byte[16];
-        SecureRandom random = new SecureRandom();
-        random.nextBytes(token);
-        random.nextBytes(epoch);
-        byte[] installation = ReadReceiptAndroidSqlite.uuidBytes(
-                ReadReceiptProtocolV2.installationId(token));
-        String databasePath = sandbox.databases + "/iris_read_receipts.db";
-        if (!new ReadReceiptAndroidSqlite().createFresh(
-                databasePath, installation, epoch, System.currentTimeMillis())) {
-            throw new IllegalStateException();
+        try {
+            byte[] token = new byte[32];
+            byte[] epoch = new byte[16];
+            SecureRandom random = new SecureRandom();
+            random.nextBytes(token);
+            random.nextBytes(epoch);
+            byte[] installation = ReadReceiptAndroidSqlite.uuidBytes(
+                    ReadReceiptProtocolV2.installationId(token));
+            String databasePath = sandbox.databases + "/iris_read_receipts.db";
+            createEmptyDatabaseFile(databasePath, Process.myUid());
+            if (!new ReadReceiptAndroidSqlite().createFresh(
+                    databasePath, installation, epoch, System.currentTimeMillis())) {
+                throw new ProbeFailure("create_fresh_rejected", new IllegalStateException());
+            }
+            return new Prepared(token, epoch, databasePath);
+        } catch (ProbeFailure failure) {
+            throw failure;
+        } catch (Throwable failure) {
+            throw new ProbeFailure("prepare_exception", failure);
         }
-        return new Prepared(token, epoch, databasePath);
+    }
+
+    private static void requireMaintenancePreflight(ReadReceiptPerformanceSandbox sandbox) {
+        String path = sandbox.databases + "/iris_read_receipts.preflight.db";
+        String outcome;
+        try {
+            byte[] token = randomBytes(32);
+            byte[] epoch = randomBytes(16);
+            byte[] installation = ReadReceiptAndroidSqlite.uuidBytes(
+                    ReadReceiptProtocolV2.installationId(token));
+            createEmptyDatabaseFile(path, Process.myUid());
+            if (!new ReadReceiptAndroidSqlite().createFresh(
+                    path, installation, epoch, System.currentTimeMillis())) {
+                throw new ProbeFailure("maintenance_create_fresh", new IllegalStateException());
+            }
+            outcome = maintenancePreflight(path);
+        } catch (ProbeFailure failure) {
+            throw failure;
+        } catch (Throwable failure) {
+            throw new ProbeFailure("maintenance_preflight", failure);
+        } finally {
+            if (!SQLiteDatabase.deleteDatabase(new File(path))) {
+                throw new ProbeFailure("maintenance_cleanup", new IllegalStateException());
+            }
+        }
+        metric("maintenance_preflight", outcome);
+        if (!"ok".equals(outcome)) {
+            throw new ProbeFailure("maintenance_" + outcome, new IllegalStateException());
+        }
+    }
+
+    private static void createEmptyDatabaseFile(String path, int uid) {
+        AndroidReadReceiptFileOps fileOps = new AndroidReadReceiptFileOps();
+        ReadReceiptFileOps.Handle handle = null;
+        try {
+            handle = fileOps.open(path, ReadReceiptFileOps.OpenKind.CREATE_EXCLUSIVE);
+            ReadReceiptFileOps.FileStatus status = fileOps.fstat(handle);
+            if (!status.regular || status.directory || status.uid != uid
+                    || status.mode != 0600 || status.size != 0
+                    || status.device < 0 || status.inode <= 0) {
+                throw new IllegalStateException();
+            }
+            fileOps.close(handle);
+            handle = null;
+        } catch (ReadReceiptFileOps.Failure failure) {
+            throw new IllegalStateException();
+        } finally {
+            if (handle != null) {
+                try {
+                    fileOps.close(handle);
+                } catch (ReadReceiptFileOps.Failure ignored) {
+                }
+            }
+        }
+    }
+
+    private static String maintenancePreflight(String path) {
+        SQLiteDatabase database = null;
+        String stage = "open";
+        try {
+            database = SQLiteDatabase.openDatabase(path, null,
+                    SQLiteDatabase.OPEN_READWRITE | SQLiteDatabase.NO_LOCALIZED_COLLATORS);
+            stage = "foreign_keys";
+            database.setForeignKeyConstraintsEnabled(true);
+            stage = "busy_timeout";
+            if (sqliteScalar(database, "PRAGMA busy_timeout=0") != 0) return "busy_timeout";
+            stage = "foreign_keys_read";
+            if (sqliteScalar(database, "PRAGMA foreign_keys") != 1) return "foreign_keys";
+            stage = "wal_autocheckpoint_read";
+            if (sqliteScalar(database, "PRAGMA wal_autocheckpoint=0") != 0) {
+                return "wal_autocheckpoint";
+            }
+            stage = "page_size_read";
+            if (sqliteScalar(database, "PRAGMA page_size") != ReadReceiptSchemaV2.PAGE_SIZE_BYTES) {
+                return "page_size";
+            }
+            stage = "auto_vacuum_read";
+            if (sqliteScalar(database, "PRAGMA auto_vacuum")
+                    != ReadReceiptSchemaV2.AUTO_VACUUM_INCREMENTAL) {
+                return "auto_vacuum";
+            }
+            stage = "reclaim_prepare";
+            database.execSQL("CREATE TABLE iris_probe_reclaim(payload BLOB NOT NULL)");
+            database.execSQL("INSERT INTO iris_probe_reclaim VALUES(zeroblob(32768))");
+            database.execSQL("DROP TABLE iris_probe_reclaim");
+            if (sqliteScalar(database, "PRAGMA freelist_count") <= 0) return "reclaim_prepare";
+            database.close();
+            database = null;
+            stage = "reclaim";
+            ReadReceiptAndroidMaintenanceWorker.AndroidAccess access =
+                    new ReadReceiptAndroidMaintenanceWorker.AndroidAccess(path);
+            try {
+                access.open();
+                long before = access.reclaimableBytes();
+                access.reclaimPages(1);
+                long after = access.reclaimableBytes();
+                if (before <= 0 || after >= before) return "reclaim_progress";
+            } finally {
+                access.close();
+            }
+            return "ok";
+        } catch (RuntimeException failure) {
+            return stage;
+        } finally {
+            if (database != null) database.close();
+        }
+    }
+
+    private static long sqliteScalar(SQLiteDatabase database, String sql) {
+        Cursor cursor = database.rawQuery(sql, null);
+        try {
+            if (!cursor.moveToNext()) throw new IllegalStateException();
+            long value = cursor.getLong(0);
+            if (cursor.moveToNext()) throw new IllegalStateException();
+            return value;
+        } finally {
+            cursor.close();
+        }
     }
 
     private static ReadReceiptV2Runtime startRuntime(
@@ -220,23 +354,41 @@ public final class ReadReceiptPerformanceProbe {
             ReadReceiptPerformanceSandbox sandbox,
             int uid
     ) {
-        ReadReceiptStartupValidation validation = new ReadReceiptStartupValidation(
-                new ReadReceiptAndroidStartupStore(prepared.databasePath),
-                () -> ReadReceiptV2Runtime.prepare(
-                        prepared.token, sandbox.noBackup, sandbox.databases,
-                        new AndroidReadReceiptFileOps(), uid)
-        );
-        ReadReceiptStartupValidation.Result result = validation.validateAndStart();
-        if (result.outcome != ReadReceiptStartupValidation.Outcome.READY
-                || !(result.activation instanceof ReadReceiptV2Runtime)) {
-            throw new IllegalStateException();
+        try {
+            String[] activationStage = {"runtime_prepare"};
+            ReadReceiptStartupValidation validation = new ReadReceiptStartupValidation(
+                    new ReadReceiptAndroidStartupStore(prepared.databasePath),
+                    () -> {
+                        ReadReceiptV2Runtime runtime = ReadReceiptV2Runtime.prepare(
+                                prepared.token, sandbox.noBackup, sandbox.databases,
+                                new AndroidReadReceiptFileOps(), uid);
+                        activationStage[0] = "runtime_start";
+                        return runtime;
+                    }
+            );
+            ReadReceiptStartupValidation.Result result = validation.validateAndStart();
+            if (result.outcome != ReadReceiptStartupValidation.Outcome.READY) {
+                String stage = result.outcome == ReadReceiptStartupValidation.Outcome.POISONED
+                        ? "runtime_poisoned"
+                        : result.outcome == ReadReceiptStartupValidation.Outcome.STORAGE_UNAVAILABLE
+                        ? "runtime_storage_unavailable"
+                        : activationStage[0];
+                throw new ProbeFailure(stage, new IllegalStateException());
+            }
+            if (!(result.activation instanceof ReadReceiptV2Runtime)) {
+                throw new ProbeFailure("runtime_activation", new IllegalStateException());
+            }
+            ReadReceiptV2Runtime runtime = (ReadReceiptV2Runtime) result.activation;
+            if (!runtime.healthy()) {
+                close(runtime);
+                throw new ProbeFailure("runtime_unhealthy", new IllegalStateException());
+            }
+            return runtime;
+        } catch (ProbeFailure failure) {
+            throw failure;
+        } catch (Throwable failure) {
+            throw new ProbeFailure("runtime_exception", failure);
         }
-        ReadReceiptV2Runtime runtime = (ReadReceiptV2Runtime) result.activation;
-        if (!runtime.healthy()) {
-            close(runtime);
-            throw new IllegalStateException();
-        }
-        return runtime;
     }
 
     private static long databaseTripletBytes(String databasePath) {
@@ -269,6 +421,33 @@ public final class ReadReceiptPerformanceProbe {
         try {
             runtime.close();
         } catch (RuntimeException ignored) {
+        }
+    }
+
+    private static String failureKind(Throwable failure) {
+        if (failure instanceof ProbeFailure && failure.getCause() != null) {
+            failure = failure.getCause();
+        }
+        if (failure instanceof LinkageError) return "linkage";
+        if (failure instanceof SecurityException) return "security";
+        if (failure instanceof IllegalStateException) return "state";
+        if (failure instanceof RuntimeException) return "runtime";
+        return "other";
+    }
+
+    private static String failureStage(Throwable failure) {
+        return failure instanceof ProbeFailure
+                ? ((ProbeFailure) failure).stage
+                : "dispatch";
+    }
+
+    private static final class ProbeFailure extends RuntimeException {
+        private static final long serialVersionUID = 1L;
+        final String stage;
+
+        ProbeFailure(String stage, Throwable cause) {
+            super(cause);
+            this.stage = stage;
         }
     }
 

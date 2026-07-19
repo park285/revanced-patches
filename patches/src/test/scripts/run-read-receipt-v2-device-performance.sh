@@ -237,12 +237,23 @@ package_anr_count() {
 require_probe_output() {
     local path="$1"
     local expected_exit="$2"
-    local status="$3"
-    [[ "$status" == "$expected_exit" ]] || fail "probe exit status is not exact"
+    local transport_status="$3"
+    local probe_exit_status probe_failure_kind probe_failure_stage
+    [[ "$transport_status" == "0" ]] || fail "probe transport status is not exact"
     awk '
         /^([a-z0-9_]+=[a-z0-9_-]+|result=[a-z0-9_]+,passed=(true|false))$/ { next }
         { exit 1 }
     ' "$path" || fail "probe emitted non-aggregate output"
+    probe_exit_status="$(awk -F= '$1 == "probe_exit_status" { count++; value = $2 }
+        END { if (count != 1 || value !~ /^[0-9]+$/) exit 1; print value }' "$path")" ||
+        fail "probe exit status is unavailable"
+    if [[ "$probe_exit_status" != "$expected_exit" ]]; then
+        probe_failure_kind="$(awk -F= '$1 == "probe_failure_kind" { count++; value = $2 }
+            END { if (count == 1 && value ~ /^[a-z_]+$/) print value; else print "none" }' "$path")"
+        probe_failure_stage="$(awk -F= '$1 == "probe_failure_stage" { count++; value = $2 }
+            END { if (count == 1 && value ~ /^[a-z_]+$/) print value; else print "none" }' "$path")"
+        fail "probe exit status is not exact: expected=$expected_exit observed=$probe_exit_status failure=$probe_failure_kind stage=$probe_failure_stage"
+    fi
     [[ "$(awk -F= '$1 == "cleanup_passed" { print $2 }' "$path")" == "1" ]] ||
         fail "probe cleanup did not pass"
 }
@@ -252,9 +263,9 @@ run_probe() {
     local destination="$2"
     local expected_exit="${3:-0}"
     local command status
-    command="CLASSPATH='$device_dex:$installed_apk' app_process /system/bin '$PROBE_CLASS' '$mode' '$probe_nonce'"
+    command="CLASSPATH=$device_dex:$installed_apk app_process /system/bin $PROBE_CLASS $mode $probe_nonce; probe_exit_status=\$?; printf \"probe_exit_status=%s\\n\" \"\$probe_exit_status\""
     set +e
-    remote_shell_script "su '$device_uid' -c \"$command\"" >"$destination"
+    remote_shell_script "su '$device_uid' -c '$command'" >"$destination"
     status=$?
     set -e
     require_probe_output "$destination" "$expected_exit" "$status"
@@ -447,7 +458,7 @@ EOF
 }
 
 run_self_test() {
-    local rejected=0 runner_dir budget_fixture tampered gfx_fixture
+    local rejected=0 runner_dir budget_fixture tampered gfx_fixture probe_fixture
     contains_live_path safe.apk lineage host output || true
     if contains_live_path safe.apk /data/user/0/com.kakao.talk/databases/live.db; then
         rejected=1
@@ -494,6 +505,17 @@ run_self_test() {
         >/dev/null 2>&1; then
         fail "installed APK path parser accepted split output"
     fi
+    probe_fixture="$(mktemp)"
+    printf 'cleanup_passed=1\nprobe_exit_status=3\n' >"$probe_fixture"
+    require_probe_output "$probe_fixture" 3 0
+    if ( require_probe_output "$probe_fixture" 3 255 ) 2>/dev/null; then
+        fail "probe output verifier accepted transport failure"
+    fi
+    printf 'probe_exit_status=3\n' >>"$probe_fixture"
+    if ( require_probe_output "$probe_fixture" 3 0 ) 2>/dev/null; then
+        fail "probe output verifier accepted duplicate exit status"
+    fi
+    rm -f -- "$probe_fixture"
     require_digest "$(printf 'a%.0s' {1..64})" || fail "digest self-test failed"
     [[ "$(marker_recovery_action "marker=exact backup=absent")" == "stable" &&
         "$(marker_recovery_action "marker=absent backup=exact")" == "restore" ]] ||
@@ -528,7 +550,7 @@ run_self_test() {
     verify_output_templates "${BASH_SOURCE[0]}" || fail "output template self-test failed"
     runner_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
     bash "$runner_dir/verify-read-receipt-v2-performance-receipt.sh" --self-test >/dev/null
-    echo "RRV2-DEVICE-PERFORMANCE-RUNNER-SELF-TEST passed: livePathReject=1 percentile=nearestRank gfxCountExact=1 gfxDuplicateReject=1 gfxSuffixReject=1 installedApkPathExact=1 installedApkPathReject=9 modes=9 markerTimeoutRecovery=1 markerResponseLossRecovery=1 ambiguousMarkerReject=1 budgetBoundary=1 budgetExceedReject=5 templateExact=1 receiptVerifier=1"
+    echo "RRV2-DEVICE-PERFORMANCE-RUNNER-SELF-TEST passed: livePathReject=1 percentile=nearestRank gfxCountExact=1 gfxDuplicateReject=1 gfxSuffixReject=1 installedApkPathExact=1 installedApkPathReject=9 probeExitExact=1 probeTransportReject=1 probeExitDuplicateReject=1 modes=9 markerTimeoutRecovery=1 markerResponseLossRecovery=1 ambiguousMarkerReject=1 budgetBoundary=1 budgetExceedReject=5 templateExact=1 receiptVerifier=1"
 }
 
 if (( $# == 1 )) && [[ "$1" == "--self-test" ]]; then
