@@ -29,4 +29,10 @@ jobs:
       - name: Build
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: ./gradlew :patches:buildAndroid --no-daemon
+        run: >-
+          ./gradlew
+          -PreadReceiptV2ReleaseLane=true
+          --dependency-verification=strict
+          :patches:verifyReadReceiptV2Portable
+          :patches:buildAndroid
+          --no-daemon
