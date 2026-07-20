@@ -34,6 +34,7 @@ val readReceiptV2LaneProtectedTasks = setOf(
     "verifyReadReceiptV2ExactDeltaRunner",
     "verifyReadReceiptV2ExactDeltaPreflight",
     "verifyReadReceiptV2ExactDeltaHooks",
+    "verifyReadReceiptV2Portable",
     "verifyReadReceiptV2ExactDelta",
     "applyReadReceiptV2ExactDelta",
     "compileKotlin",
@@ -477,8 +478,8 @@ tasks {
         }
     }
 
-    register("verifyReadReceiptV2ExactDelta") {
-        description = "Runs every release-blocking exact-delta verifier for the pinned patched APK"
+    register("verifyReadReceiptV2Portable") {
+        description = "Runs every release-blocking read-receipt v2 verifier that does not require an exact APK"
         dependsOn(
             verifyReadReceiptV2DependencyLane,
             ":extensions:kakaotalk:read-receipt-v2:testDebugUnitTest",
@@ -492,6 +493,13 @@ tasks {
             "verifyReadReceiptV2PerformanceReceiptSelfTest",
             "verifyReadReceiptV2DevicePerformanceRunnerSelfTest",
             "verifyReadReceiptV2ExactDeltaRunner",
+        )
+    }
+
+    register("verifyReadReceiptV2ExactDelta") {
+        description = "Runs every release-blocking exact-delta verifier for the pinned patched APK"
+        dependsOn(
+            "verifyReadReceiptV2Portable",
             "verifyReadReceiptV2ExactDeltaPreflight",
             "verifyReadReceiptV2ExactDeltaHooks",
         )
