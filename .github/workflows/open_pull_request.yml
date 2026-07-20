@@ -10,7 +10,7 @@ env:
   MESSAGE: Merge branch `${{ github.head_ref || github.ref_name }}` to `main`
 
 permissions:
-  contents: write
+  contents: read
   pull-requests: write
 
 jobs:
