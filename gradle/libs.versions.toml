@@ -18,6 +18,7 @@ apksig = "9.1.0" # match with agp version
 hiddenapibypass = "6.1"
 pine = "0.3.0"
 netty = "4.2.16.Final"
+junit = "4.13.2"
 
 [libraries]
 morphe-patches-library = { module = "app.morphe:morphe-patches-library", version.ref = "morphe-patches-library" }
@@ -36,6 +37,7 @@ apksig = { group = "com.android.tools.build", name = "apksig", version.ref = "ap
 hiddenapibypass = { module = "org.lsposed.hiddenapibypass:hiddenapibypass", version.ref = "hiddenapibypass" }
 pine = { group = "top.canyie.pine", name = "core", version.ref = "pine" }
 netty-all = { module = "io.netty:netty-all", version.ref = "netty" }
+junit = { module = "junit:junit", version.ref = "junit" }
 
 [plugins]
 android-library = { id = "com.android.library" }

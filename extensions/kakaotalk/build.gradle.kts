@@ -8,6 +8,8 @@ dependencies {
     compileOnly(libs.netty.all)
 
     implementation(libs.hiddenapibypass)
+
+    testImplementation(libs.junit)
 }
 
 android {

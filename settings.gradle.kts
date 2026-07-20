@@ -1,8 +1,19 @@
 rootProject.name = "revanced-patches"
 
 pluginManagement {
+    val readReceiptV2ReleaseLane =
+        providers.gradleProperty("readReceiptV2ReleaseLane").orNull == "true"
+    val readReceiptV2PinnedOfflineLane =
+        providers.gradleProperty("readReceiptV2PinnedOfflineLane").orNull == "true"
+    if (readReceiptV2ReleaseLane && readReceiptV2PinnedOfflineLane) {
+        throw GradleException(
+            "read-receipt v2 release and pinned offline lanes cannot both be enabled",
+        )
+    }
     repositories {
-        mavenLocal()
+        if (!readReceiptV2ReleaseLane) {
+            mavenLocal()
+        }
         gradlePluginPortal()
         google()
         maven {
@@ -17,9 +28,20 @@ pluginManagement {
 }
 
 dependencyResolutionManagement {
+    val readReceiptV2ReleaseLane =
+        providers.gradleProperty("readReceiptV2ReleaseLane").orNull == "true"
+    val readReceiptV2PinnedOfflineLane =
+        providers.gradleProperty("readReceiptV2PinnedOfflineLane").orNull == "true"
+    if (readReceiptV2ReleaseLane && readReceiptV2PinnedOfflineLane) {
+        throw GradleException(
+            "read-receipt v2 release and pinned offline lanes cannot both be enabled",
+        )
+    }
     repositoriesMode.set(RepositoriesMode.PREFER_PROJECT)
     repositories {
-        mavenLocal()
+        if (!readReceiptV2ReleaseLane) {
+            mavenLocal()
+        }
         gradlePluginPortal()
         google()
         maven {
