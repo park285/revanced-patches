@@ -84,7 +84,7 @@ compile_and_verify() {
         -o "$output" \
         "$source_file"
 
-    "$readelf_tool" -h "$output" | grep -Fq "Machine:                           $expected_machine"
+    "$readelf_tool" -h "$output" | grep -F "Machine:                           $expected_machine" >/dev/null
     local load_count=0
     while read -r alignment; do
         load_count=$((load_count + 1))

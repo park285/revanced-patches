@@ -38,7 +38,6 @@ jobs:
           ./gradlew
           -PreadReceiptV2ReleaseLane=true
           --dependency-verification=strict
-          --max-workers=1
           :patches:verifyReadReceiptV2Portable
           :patches:buildAndroid
           generatePatchesList

@@ -48,7 +48,7 @@ verify_one() {
     local library="$resource_root/$abi/libreadreceiptfs.so"
     local actual_exports="$tmp_dir/$abi-exports.txt"
     [[ -f "$library" ]]
-    "$readelf_tool" -h "$library" | grep -Fq "Machine:                           $machine"
+    "$readelf_tool" -h "$library" | grep -F "Machine:                           $machine" >/dev/null
     local unexpected_dependency
     unexpected_dependency="$(
         "$readelf_tool" -d "$library" \
