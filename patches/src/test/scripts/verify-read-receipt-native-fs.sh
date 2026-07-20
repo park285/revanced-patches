@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
+
+trap 'status=$?; echo "read-receipt native verification failed: line=$LINENO status=$status" >&2; exit "$status"' ERR
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 source_file="$(cd -- "$script_dir/../../main/cpp/readreceipt" && pwd)/read_receipt_native_fs.cpp"
