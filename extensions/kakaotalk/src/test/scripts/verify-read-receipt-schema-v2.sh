@@ -3,12 +3,19 @@ set -euo pipefail
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 schema="$script_dir/../resources/read-receipt-v2/read_receipt_schema_v2.sql"
-sqlite3_bin=${SQLITE3_BIN:-/opt/android-sdk/platform-tools/sqlite3}
+if [[ -n ${SQLITE3_BIN:-} ]]; then
+    sqlite3_candidate=$SQLITE3_BIN
+elif [[ -x /opt/android-sdk/platform-tools/sqlite3 ]]; then
+    sqlite3_candidate=/opt/android-sdk/platform-tools/sqlite3
+else
+    sqlite3_candidate=sqlite3
+fi
+sqlite3_bin=$(command -v -- "$sqlite3_candidate" 2>/dev/null || true)
 database=$(mktemp "${TMPDIR:-/tmp}/read-receipt-schema-v2.XXXXXX.db")
 trap 'unlink "$database"' EXIT
 
-if [[ ! -x "$sqlite3_bin" ]]; then
-    echo "sqlite3 unavailable: $sqlite3_bin" >&2
+if [[ -z "$sqlite3_bin" || ! -x "$sqlite3_bin" ]]; then
+    echo "sqlite3 unavailable: $sqlite3_candidate" >&2
     exit 1
 fi
 
